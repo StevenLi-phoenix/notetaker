@@ -1,3 +1,5 @@
+![TranscribeNote banner](./banner.png)
+
 # TranscribeNote
 
 A macOS note-taking and transcription app with live ASR, audio recording/playback, LLM-powered summarization, scheduled recordings, and session history — all local-first.
