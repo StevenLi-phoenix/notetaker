@@ -12,6 +12,7 @@ struct TranscriptSegmentRow: View {
 
             Text(segment.text)
                 .font(DS.Typography.body)
+                .textSelection(.enabled)
         }
         .padding(.vertical, DS.Spacing.xxs)
         .padding(.leading, DS.Spacing.xxs)

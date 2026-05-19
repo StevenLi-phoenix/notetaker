@@ -48,6 +48,7 @@ final class RecordingViewModel {
     private(set) var summaries: [SummaryBlock] = []
     private(set) var isSummarizing: Bool = false
     private(set) var latestSummary: String?
+    private(set) var latestKeyPoints: [String] = []
     private(set) var summaryError: String?
     private(set) var stoppingStatus: String = "Saving..."
 
@@ -498,6 +499,7 @@ final class RecordingViewModel {
                     )
                     self.summaries.append(block)
                     self.latestSummary = result.content
+                    self.latestKeyPoints = result.structured?.keyPoints ?? []
                     self.lastSummarizedSegmentCount = self.segments.count
                     self.nextPeriodicCoveringFrom = coveringTo
                 }
@@ -660,6 +662,7 @@ final class RecordingViewModel {
         summaries = []
         isSummarizing = false
         latestSummary = nil
+        latestKeyPoints = []
         summaryError = nil
         stoppingStatus = "Saving..."
         lastSummarizedSegmentCount = 0

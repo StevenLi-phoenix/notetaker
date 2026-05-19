@@ -24,6 +24,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        applyMenuBarOnlyPolicy()
+        applyAppearancePreference()
+        if UserDefaults.standard.bool(forKey: "menuBarOnly") {
+            // Close the auto-opened main window so only the menu bar icon remains
+            DispatchQueue.main.async {
+                for window in NSApp.windows where window.canBecomeMain {
+                    window.close()
+                }
+            }
+        }
+    }
+
+    /// Apply the appearance preference (light/dark/system).
+    func applyAppearancePreference() {
+        let raw = UserDefaults.standard.string(forKey: "appearanceOverride") ?? "system"
+        switch raw {
+        case "dark":  NSApp.appearance = NSAppearance(named: .darkAqua)
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        default:      NSApp.appearance = nil
+        }
+    }
+
+    /// Apply the activation policy based on the menuBarOnly preference.
+    func applyMenuBarOnlyPolicy() {
+        let menuBarOnly = UserDefaults.standard.bool(forKey: "menuBarOnly")
+        NSApp.setActivationPolicy(menuBarOnly ? .accessory : .regular)
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let hasRecording = viewModel?.isActive == true
 
@@ -46,6 +75,19 @@ struct TranscribeNoteApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var viewModel: RecordingViewModel
     @State private var schedulerViewModel: SchedulerViewModel
+    @AppStorage("showMenuBarIcon") private var showMenuBarIcon = true
+    @AppStorage("textZoomLevel") private var textZoomLevel: Int = 2
+    @AppStorage("appearanceOverride") private var appearanceOverride: String = "system"
+
+    // macOS default sizeCategory is .large (index 2)
+    private static let zoomCategories: [ContentSizeCategory] = [
+        .small, .medium, .large, .extraLarge, .extraExtraLarge,
+    ]
+
+    private var currentSizeCategory: ContentSizeCategory {
+        let clamped = min(max(textZoomLevel, 0), Self.zoomCategories.count - 1)
+        return Self.zoomCategories[clamped]
+    }
 
     private let sharedModelContainer: ModelContainer?
     private let containerError: String?
@@ -141,11 +183,31 @@ struct TranscribeNoteApp: App {
             if let sharedModelContainer {
                 ContentView(viewModel: viewModel, schedulerViewModel: schedulerViewModel)
                     .modelContainer(sharedModelContainer)
+                    .environment(\.sizeCategory, currentSizeCategory)
+                    .onChange(of: appearanceOverride) { _, newValue in
+                        switch newValue {
+                        case "dark":  NSApp.appearance = NSAppearance(named: .darkAqua)
+                        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+                        default:      NSApp.appearance = nil
+                        }
+                    }
                     .onAppear {
                         schedulerViewModel.load(context: sharedModelContainer.mainContext)
                     }
                     .task {
                         await LLMProvider.refreshStorefrontStatus()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
+                        guard UserDefaults.standard.bool(forKey: "menuBarOnly") else { return }
+                        // Delay so the window finishes closing before checking
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            let hasContentWindows = NSApp.windows.contains {
+                                $0.isVisible && $0.canBecomeMain
+                            }
+                            if !hasContentWindows {
+                                NSApp.setActivationPolicy(.accessory)
+                            }
+                        }
                     }
             } else {
                 VStack(spacing: DS.Spacing.md) {
@@ -164,7 +226,7 @@ struct TranscribeNoteApp: App {
             }
         }
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $showMenuBarIcon) {
             if let sharedModelContainer {
                 MenuBarView(viewModel: viewModel, schedulerViewModel: schedulerViewModel, modelContainer: sharedModelContainer)
             } else {
@@ -177,11 +239,13 @@ struct TranscribeNoteApp: App {
         Window("Models", id: "models") {
             ModelsSettingsTab()
                 .frame(width: 600, height: 600)
+                .environment(\.sizeCategory, currentSizeCategory)
         }
         .windowResizability(.contentSize)
 
         Settings {
             SettingsView()
+                .environment(\.sizeCategory, currentSizeCategory)
         }
         .commands {
             #if DEBUG
@@ -242,6 +306,23 @@ struct TranscribeNoteApp: App {
                     NotificationCenter.default.post(name: .toggleCommandPalette, object: nil)
                 }
                 .keyboardShortcut("k", modifiers: .command)
+            }
+
+            CommandMenu("View") {
+                Button("Increase Text Size") {
+                    textZoomLevel = min(textZoomLevel + 1, Self.zoomCategories.count - 1)
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button("Decrease Text Size") {
+                    textZoomLevel = max(textZoomLevel - 1, 0)
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Reset Text Size") {
+                    textZoomLevel = 2
+                }
+                .keyboardShortcut("0", modifiers: .command)
             }
         }
     }
@@ -356,7 +437,24 @@ struct MenuBarView: View {
                 .padding(.bottom, DS.Spacing.xs)
                 .frame(minWidth: 280)
 
-            if let summary = viewModel.latestSummary {
+            if !viewModel.latestKeyPoints.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: DS.Spacing.xxs) {
+                    ForEach(viewModel.latestKeyPoints, id: \.self) { point in
+                        HStack(alignment: .top, spacing: DS.Spacing.xs) {
+                            Text("•")
+                            Text(point)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+                .font(DS.Typography.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, DS.Spacing.md)
+                .padding(.vertical, DS.Spacing.xs)
+                .frame(minWidth: 280, alignment: .leading)
+            } else if let summary = viewModel.latestSummary {
                 Divider()
                 Text(summary)
                     .font(DS.Typography.caption)
@@ -442,7 +540,9 @@ struct MenuBarView: View {
         Divider()
 
         Button("Open Main Window") {
+            NSApp.setActivationPolicy(.regular)
             openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
         }
 
         SettingsLink()
